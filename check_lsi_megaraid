@@ -1,0 +1,180 @@
+#!/bin/bash
+
+# Nagios check for LSI drive controller
+# Add to root crontab:
+#*/5     *       *       *       *       /opt/MegaRAID/MegaCli/MegaCli64 -PDList -aALL > /tmp/lsi_megaraid_pdisk.status
+#*/5     *       *       *       *       /opt/MegaRAID/MegaCli/MegaCli64 -LDInfo -Lall -aALL > /tmp/lsi_megaraid_vdisk.status
+
+
+#STATUS=0
+WARNING=0
+CRITICAL=0
+
+SLOT=x
+LOGDISK=x
+COUNT=0
+LOGCOUNT=0
+
+#Set commands
+#CMDOUT=`/usr/sbin/megacli -PDList -aALL`
+#CMDOUT=`cat /home/nathan/test.txt`
+CMDOUTPDISK=`cat /tmp/lsi_megaraid_pdisk.status`
+#CMDOUTVDISK=`/usr/sbin/megacli -LDInfo -Lall -aALL`
+CMDOUTVDISK=`cat /tmp/lsi_megaraid_vdisk.status`
+
+#Variables
+TEMPWARN=40
+TEMPCRIT=55
+MEDIAERRORLIMIT=0
+OTHERERRORLIMIT=0
+PREDFAILLIMIT=0
+
+IFS=$'\n'
+
+
+#Check physical disks
+for line in $CMDOUTPDISK
+do
+	#echo "-----"
+	#echo $line
+
+	#Get slot number
+	if [ "`echo $line | cut -d':' -f1`" = "Slot Number" ]
+	then
+		SLOT=`echo $line | cut -d ':' -f2-`
+		let "COUNT++"
+	fi
+
+	#Check for S.M.A.R.T alert
+	if [ "`echo $line | cut -d':' -f1`" = "Drive has flagged a S.M.A.R.T alert " ]
+	then
+		SMARTSTRING=`echo $line | cut -d ':' -f2-`
+		if [ $SMARTSTRING != " No" ]
+		then
+			#STATUS=2
+			CRITICAL=1
+			echo "CRITICAL: Drive $SLOT reports S.M.A.R.T fault"
+		fi
+	fi
+
+	#Check for drive temperature
+	if [ "`echo $line | cut -d':' -f1`" = "Drive Temperature " ]
+	then
+		DRIVETEMP=`echo $line | cut -d':' -f2-`
+		DRIVETEMPVALUE=`echo $DRIVETEMP | cut -d'C' -f1`
+		if [ $DRIVETEMPVALUE -gt $TEMPWARN ]
+		then
+			if [ $DRIVETEMPVALUE -gt $TEMPCRIT ]
+			then
+				#STATUS=2
+				CRITICAL=1
+				echo "CRITICAL: Drive $SLOT temperature is $DRIVETEMP"
+			else
+				WARNING=1
+				echo "WARNING: Drive $SLOT temperature is $DRIVETEMP"
+			fi
+		fi
+	fi
+
+	#Check for media errors
+	if [ "`echo $line | cut -d':' -f1`" = "Media Error Count" ]
+	then
+		MEDIAERR=`echo $line | cut -d':' -f2-`
+		if [ $MEDIAERR -gt $MEDIAERRORLIMIT ]
+		then
+			CRITICAL=1
+			echo "CRITICAL: Drive $SLOT reports $MEDIAERR media error(s)"
+		fi
+	fi
+
+	#Check for other errors
+        if [ "`echo $line | cut -d':' -f1`" = "Other Error Count" ]
+        then
+                OTHERERR=`echo $line | cut -d':' -f2-`
+                if [ $OTHERERR -gt $OTHERERRORLIMIT ]
+                then
+                        CRITICAL=1
+                        echo "CRITICAL: Drive $SLOT reports $OTHERERR other error(s)"
+                fi
+        fi
+
+	#Check predictive failure count
+        if [ "`echo $line | cut -d':' -f1`" = "Predictive Failure Count" ]
+        then
+                PREDFAIL=`echo $line | cut -d':' -f2-`
+                if [ $PREDFAIL -gt $PREDFAILLIMIT ]
+                then
+                        CRITICAL=1
+                        echo "CRITICAL: Drive $SLOT reports predictive failure count $PREDFAIL"
+                fi
+        fi
+
+
+done
+
+
+#Check logical disks
+for line in $CMDOUTVDISK
+do
+	#Get logical disk number
+        if [ "`echo $line | cut -d':' -f1`" = "Virtual Drive" ]
+        then
+                LOGDISK=`echo $line | cut -d ':' -f2- | cut -d'(' -f1`
+                let "LOGCOUNT++"
+        fi
+
+	#Check for non optimal state
+        if [ "`echo $line | tr -s ' ' | cut -d':' -f1`" = "State " ]
+        then
+                STATESTRING=`echo $line | cut -d ':' -f2-`
+                if [ $STATESTRING != " Optimal" ]
+                then
+                        CRITICAL=1
+                        echo "CRITICAL: Logical disk $LOGDISK is not in optimal state"
+                fi
+        fi
+
+	#Check for "bad blocks exist" flag
+        #if [ "`echo $line | tr -s ' ' | cut -d':' -f1`" = "Bad Blocks Exist" ]
+        #then
+        #        BADBLOCKSTRING=`echo $line | cut -d ':' -f2-`
+        #        if [ $BADBLOCKSTRING != " No" ]
+        #        then
+        #                CRITICAL=1
+        #                echo "CRITICAL: Logical disk $LOGDISK has bad blocks"
+        #        fi
+        #fi
+
+done
+
+if [ $WARNING -eq 0 ] && [ $CRITICAL -eq 0 ]
+then
+	echo "PHYSICAL DRIVES: $COUNT OK! / LOGICAL DRIVES: $LOGCOUNT OK!"
+	exit 0
+fi
+
+if [ $CRITICAL -eq 1 ]
+then
+	exit 2
+fi
+
+if [ $WARNING -eq 1 ]
+then
+	exit 1
+fi
+
+
+#case $STATUS in
+#	0)
+#		echo "DRIVES: $COUNT OK!"
+#		exit 0
+#		;;
+#	1)
+#		echo "WARNING: ???"
+#		exit 1
+#		;;
+#	2)
+#		exit 2
+#		;;
+#esac
+
